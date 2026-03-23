@@ -9,30 +9,111 @@ body {
     background: #0f172a;
     color: #e5e7eb;
     font-family: Consolas, monospace;
+    margin: 0;
     padding: 20px;
 }
 
 h1 {
     color: #38bdf8;
+    margin-top: 0;
 }
 
-input {
+.page {
+    max-width: 1280px;
+    margin: 0 auto;
+}
+
+.toolbar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 16px;
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.field label {
+    font-size: 13px;
+    color: #93c5fd;
+}
+
+input,
+button {
     padding: 8px;
-    width: 300px;
     background: #111827;
     color: white;
     border: 1px solid #374151;
+    border-radius: 8px;
+    box-sizing: border-box;
+}
+
+button {
+    background: #0284c7;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover {
+    background: #0369a1;
+}
+
+.actions {
+    display: flex;
+    align-items: end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.status {
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    border: 1px solid #1f2937;
+    background: #111827;
+}
+
+.status.ok {
+    color: #86efac;
+    border-color: #14532d;
+}
+
+.status.error {
+    color: #fca5a5;
+    border-color: #7f1d1d;
+}
+
+.status.idle {
+    color: #cbd5e1;
+}
+
+.filters {
+    margin-bottom: 16px;
+}
+
+.filters input {
+    width: 100%;
+    max-width: 360px;
 }
 
 .table {
-    margin-top: 20px;
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
 }
 
 .table th, .table td {
     border: 1px solid #1f2937;
     padding: 10px;
+    vertical-align: top;
 }
 
 .table tr:nth-child(even) {
@@ -44,30 +125,90 @@ input {
     word-break: break-all;
 }
 
-/* 高亮 */
 .keyword { color: #22c55e; }
 .danger { color: #ef4444; font-weight: bold; }
+.muted { color: #94a3b8; }
 </style>
 </head>
 
 <body>
+<div class="page">
+    <h1>MySQL SQL Monitor</h1>
 
-<h1>🛰 MySQL SQL Monitor</h1>
+    <form id="config-form" class="toolbar">
+        <div class="field">
+            <label for="host">Host</label>
+            <input id="host" name="host" value="127.0.0.1" autocomplete="off">
+        </div>
+        <div class="field">
+            <label for="port">Port</label>
+            <input id="port" name="port" type="number" min="1" max="65535" value="3306">
+        </div>
+        <div class="field">
+            <label for="user">User</label>
+            <input id="user" name="user" value="root" autocomplete="username">
+        </div>
+        <div class="field">
+            <label for="pass">Password</label>
+            <input id="pass" name="pass" type="password" autocomplete="current-password">
+        </div>
+        <div class="field">
+            <label for="dbname">Database</label>
+            <input id="dbname" name="dbname" value="wx_novel" autocomplete="off">
+        </div>
+        <div class="field">
+            <label for="limit">日志条数</label>
+            <input id="limit" name="limit" type="number" min="1" max="1000" value="100">
+        </div>
+        <div class="actions">
+            <button type="submit">Connect</button>
+            <button type="button" id="enable-log">开启日志</button>
+            <button type="button" id="clear-log">清空日志</button>
+        </div>
+    </form>
 
-<input id="search" placeholder="Search SQL...">
+    <div id="status" class="status idle">填写连接配置后点击 Connect，页面会每 2 秒自动刷新。</div>
 
-<table class="table">
-<thead>
-<tr>
-<th>Time</th>
-<th>SQL</th>
-</tr>
-</thead>
-<tbody id="data"></tbody>
-</table>
+    <div class="filters">
+        <input id="search" placeholder="Search SQL...">
+    </div>
+
+    <table class="table">
+        <thead>
+            <tr>
+                <th style="width: 90px;">序号</th>
+                <th style="width: 220px;">Time</th>
+                <th>SQL</th>
+            </tr>
+        </thead>
+        <tbody id="data">
+            <tr>
+                <td colspan="3" class="muted">暂无数据</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
 
 <script>
+const STORAGE_KEY = "mysql-monitor-config";
+const SESSION_KEY = "mysql-monitor-session";
+const REFRESH_MS = 2000;
+
+let currentRows = [];
+let pollTimer = null;
+let isLoading = false;
+
+function escapeHtml(text) {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
 function highlight(sql) {
+    sql = escapeHtml(sql);
     sql = sql.replace(/(select|from|where|insert|update|delete|union)/ig,
         '<span class="keyword">$1</span>');
 
@@ -77,34 +218,244 @@ function highlight(sql) {
     return sql;
 }
 
-function loadData() {
-    fetch("monitor.php")
-        .then(res => res.json())
-        .then(data => {
-            let html = "";
-            let keyword = document.getElementById("search").value.toLowerCase();
-
-            data.forEach(row => {
-                let sql = row.argument;
-
-                if (keyword && !sql.toLowerCase().includes(keyword)) {
-                    return;
-                }
-
-                html += `
-                <tr>
-                    <td>${row.event_time}</td>
-                    <td class="sql">${highlight(sql)}</td>
-                </tr>`;
-            });
-
-            document.getElementById("data").innerHTML = html;
-        });
+function setStatus(message, type = "idle") {
+    const status = document.getElementById("status");
+    status.className = `status ${type}`;
+    status.textContent = message;
 }
 
-// 每2秒刷新
-setInterval(loadData, 2000);
-loadData();
+function formatRefreshTime() {
+    return new Date().toLocaleTimeString("zh-CN", {
+        hour12: false
+    });
+}
+
+function getConfig() {
+    return {
+        host: document.getElementById("host").value.trim(),
+        port: document.getElementById("port").value.trim(),
+        user: document.getElementById("user").value.trim(),
+        pass: document.getElementById("pass").value,
+        dbname: document.getElementById("dbname").value.trim(),
+        limit: document.getElementById("limit").value.trim()
+    };
+}
+
+function saveConfig(config) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        host: config.host,
+        port: config.port,
+        user: config.user,
+        dbname: config.dbname,
+        limit: config.limit
+    }));
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+        pass: config.pass
+    }));
+}
+
+function restoreConfig() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+        const session = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "{}");
+        document.getElementById("host").value = saved.host || "127.0.0.1";
+        document.getElementById("port").value = saved.port || "3306";
+        document.getElementById("user").value = saved.user || "root";
+        document.getElementById("pass").value = session.pass || "";
+        document.getElementById("dbname").value = saved.dbname || "wx_novel";
+        document.getElementById("limit").value = saved.limit || "100";
+    } catch (error) {
+        console.error("Failed to restore config", error);
+    }
+}
+
+function renderRows(rows) {
+    const keyword = document.getElementById("search").value.toLowerCase();
+    const tbody = document.getElementById("data");
+    let html = "";
+    let displayIndex = 0;
+
+    rows.forEach(row => {
+        const sql = row.argument || "";
+
+        if (keyword && !sql.toLowerCase().includes(keyword)) {
+            return;
+        }
+
+        displayIndex += 1;
+        html += `
+            <tr>
+                <td>${displayIndex}</td>
+                <td>${escapeHtml(row.event_time || "")}</td>
+                <td class="sql">${highlight(sql)}</td>
+            </tr>`;
+    });
+
+    if (!html) {
+        html = `
+            <tr>
+                <td colspan="3" class="muted">没有匹配到 SQL 记录</td>
+            </tr>`;
+    }
+
+    tbody.innerHTML = html;
+}
+
+async function loadData() {
+    if (isLoading) {
+        return;
+    }
+
+    const config = getConfig();
+    if (!config.host || !config.user) {
+        setStatus("Host 和 User 不能为空。", "error");
+        return;
+    }
+
+    const limit = parseInt(config.limit, 10);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+        setStatus("日志条数必须是 1 到 1000 之间的整数。", "error");
+        return;
+    }
+
+    config.limit = String(limit);
+
+    isLoading = true;
+
+    try {
+        const res = await fetch("monitor.php", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(config)
+        });
+        const rawText = await res.text();
+        let data;
+
+        try {
+            data = JSON.parse(rawText);
+        } catch (parseError) {
+            throw new Error(`接口没有返回合法 JSON: ${rawText.slice(0, 160)}`);
+        }
+
+        if (!res.ok || !Array.isArray(data)) {
+            throw new Error(data.error || "加载 SQL 失败");
+        }
+
+        currentRows = data;
+        renderRows(currentRows);
+        saveConfig(config);
+        setStatus(`已连接 ${config.host}:${config.port || "3306"}，当前拉取最近 ${data.length} 条 SQL，上次刷新 ${formatRefreshTime()}。`, "ok");
+        return true;
+    } catch (error) {
+        currentRows = [];
+        renderRows(currentRows);
+        setStatus(error.message, "error");
+        return false;
+    } finally {
+        isLoading = false;
+    }
+}
+
+async function postMonitorAction(action, successMessage) {
+    if (isLoading) {
+        return false;
+    }
+
+    const config = getConfig();
+    if (!config.host || !config.user) {
+        setStatus("Host 和 User 不能为空。", "error");
+        return false;
+    }
+
+    const limit = parseInt(config.limit, 10);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+        setStatus("日志条数必须是 1 到 1000 之间的整数。", "error");
+        return false;
+    }
+
+    config.limit = String(limit);
+    config.action = action;
+
+    isLoading = true;
+
+    try {
+        const res = await fetch("monitor.php", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(config)
+        });
+        const rawText = await res.text();
+        let data;
+
+        try {
+            data = JSON.parse(rawText);
+        } catch (parseError) {
+            throw new Error(`接口没有返回合法 JSON: ${rawText.slice(0, 160)}`);
+        }
+
+        if (!res.ok || !data || data.ok !== true) {
+            throw new Error(data && data.error ? data.error : "操作失败");
+        }
+
+        saveConfig(config);
+        setStatus(successMessage || data.message || "操作成功", "ok");
+        return true;
+    } catch (error) {
+        setStatus(error.message, "error");
+        return false;
+    } finally {
+        isLoading = false;
+    }
+}
+
+function startPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+    }
+    pollTimer = setInterval(loadData, REFRESH_MS);
+}
+
+document.getElementById("config-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const ok = await loadData();
+    if (ok) {
+        startPolling();
+    }
+});
+
+document.getElementById("search").addEventListener("input", () => {
+    renderRows(currentRows);
+});
+
+document.getElementById("enable-log").addEventListener("click", async () => {
+    const ok = await postMonitorAction("enable_logging", "日志已开启，正在刷新。");
+    if (ok) {
+        await loadData();
+        startPolling();
+    }
+});
+
+document.getElementById("clear-log").addEventListener("click", async () => {
+    const ok = await postMonitorAction("clear_logs", "日志已清空，正在重新读取。");
+    if (ok) {
+        await loadData();
+        startPolling();
+    }
+});
+
+async function bootstrap() {
+    restoreConfig();
+    const ok = await loadData();
+    if (ok) {
+        startPolling();
+    }
+}
+
+bootstrap();
 </script>
 
 </body>
