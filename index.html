@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MySQL Monitor</title>
+
+<style>
+body {
+    background: #0f172a;
+    color: #e5e7eb;
+    font-family: Consolas, monospace;
+    padding: 20px;
+}
+
+h1 {
+    color: #38bdf8;
+}
+
+input {
+    padding: 8px;
+    width: 300px;
+    background: #111827;
+    color: white;
+    border: 1px solid #374151;
+}
+
+.table {
+    margin-top: 20px;
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table th, .table td {
+    border: 1px solid #1f2937;
+    padding: 10px;
+}
+
+.table tr:nth-child(even) {
+    background: #111827;
+}
+
+.sql {
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* 高亮 */
+.keyword { color: #22c55e; }
+.danger { color: #ef4444; font-weight: bold; }
+</style>
+</head>
+
+<body>
+
+<h1>🛰 MySQL SQL Monitor</h1>
+
+<input id="search" placeholder="Search SQL...">
+
+<table class="table">
+<thead>
+<tr>
+<th>Time</th>
+<th>SQL</th>
+</tr>
+</thead>
+<tbody id="data"></tbody>
+</table>
+
+<script>
+function highlight(sql) {
+    sql = sql.replace(/(select|from|where|insert|update|delete|union)/ig,
+        '<span class="keyword">$1</span>');
+
+    sql = sql.replace(/(sleep|benchmark|or 1=1)/ig,
+        '<span class="danger">$1</span>');
+
+    return sql;
+}
+
+function loadData() {
+    fetch("monitor.php")
+        .then(res => res.json())
+        .then(data => {
+            let html = "";
+            let keyword = document.getElementById("search").value.toLowerCase();
+
+            data.forEach(row => {
+                let sql = row.argument;
+
+                if (keyword && !sql.toLowerCase().includes(keyword)) {
+                    return;
+                }
+
+                html += `
+                <tr>
+                    <td>${row.event_time}</td>
+                    <td class="sql">${highlight(sql)}</td>
+                </tr>`;
+            });
+
+            document.getElementById("data").innerHTML = html;
+        });
+}
+
+// 每2秒刷新
+setInterval(loadData, 2000);
+loadData();
+</script>
+
+</body>
+</html>
